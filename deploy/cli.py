@@ -162,7 +162,7 @@ def _get_swarm_cluster_id(api_url: URL, headers: dict[str, str], endpoint_id: in
             fg=typer.colors.RED,
         )
         sys.exit(1)
-    swarm_cluster_id = resp.json()["Cluster"]["ID"]
+    swarm_cluster_id = resp.json()["ID"]
     typer.secho(
         f"using swarm cluster with ID = {swarm_cluster_id}",
         fg=typer.colors.BRIGHT_GREEN,
