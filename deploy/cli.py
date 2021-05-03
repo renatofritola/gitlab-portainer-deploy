@@ -3,7 +3,7 @@ import os
 import sys
 from http import HTTPStatus
 
-import requests
+import httpx
 import typer
 from yarl import URL
 
@@ -83,9 +83,10 @@ def _get_env_variables(env_var: list[str]):
 
 def _get_auth_token(api_url: URL, username: str, password: str):
     typer.secho("Getting auth token... ", fg=typer.colors.YELLOW, nl=False)
-    resp = requests.post(
+    resp = httpx.post(
         str(api_url / "auth"),
         json={"username": username, "password": password},
+        timeout=None,
     )
     if resp.status_code != HTTPStatus.OK:
         typer.secho(
@@ -112,7 +113,7 @@ def _get_stackfile_content(stackfile: str):
 
 def _get_existing_stack(api_url: URL, headers: dict[str, str], stackname: str):
     typer.secho("Getting target stack ID... ", fg=typer.colors.YELLOW, nl=False)
-    resp = requests.get(str(api_url / "stacks"), headers=headers)
+    resp = httpx.get(str(api_url / "stacks"), headers=headers, timeout=None)
     if resp.status_code != HTTPStatus.OK:
         typer.secho(
             f"HTTP {resp.status_code} error while trying to get list of Portainer stacks",
@@ -130,7 +131,7 @@ def _get_existing_stack(api_url: URL, headers: dict[str, str], stackname: str):
 
 def _get_endpoint_id(api_url: URL, headers: dict[str, str]):
     typer.secho("Getting endpoint ID... ", fg=typer.colors.YELLOW, nl=False)
-    resp = requests.get(str(api_url / "endpoints"), headers=headers)
+    resp = httpx.get(str(api_url / "endpoints"), headers=headers, timeout=None)
     if resp.status_code != HTTPStatus.OK:
         typer.secho(
             f"HTTP {resp.status_code} error while trying to get list of Portainer endpoints",
@@ -150,9 +151,10 @@ def _get_endpoint_id(api_url: URL, headers: dict[str, str]):
 
 def _get_swarm_cluster_id(api_url: URL, headers: dict[str, str], endpoint_id: int):
     typer.secho("Getting Swarm cluster ID... ", fg=typer.colors.YELLOW, nl=False)
-    resp = requests.get(
+    resp = httpx.get(
         str(api_url / "endpoints" / str(endpoint_id) / "docker" / "swarm"),
         headers=headers,
+        timeout=None,
     )
     if resp.status_code != HTTPStatus.OK:
         typer.secho(
@@ -178,7 +180,7 @@ def _create_stack(
     env_vars: list[dict[str, str]],
 ):
     typer.secho("Creating a new stack... ", fg=typer.colors.YELLOW, nl=False)
-    resp = requests.post(
+    resp = httpx.post(
         str(api_url / "stacks"),
         headers=headers,
         params={
@@ -192,6 +194,7 @@ def _create_stack(
             "stackFileContent": stack_file_content,
             "swarmID": cluster_id,
         },
+        timeout=None,
     )
     typer.secho("done", fg=typer.colors.BRIGHT_GREEN)
     if resp.status_code != HTTPStatus.OK:
@@ -208,7 +211,7 @@ def _update_stack(
     env_vars: list[dict[str, str]],
 ):
     typer.secho("Updating an existing stack... ", fg=typer.colors.YELLOW, nl=False)
-    resp = requests.put(
+    resp = httpx.put(
         str(api_url / "stacks" / str(stack_id)),
         headers=headers,
         params={"endpointId": endpoint_id},
@@ -216,7 +219,8 @@ def _update_stack(
             "env": env_vars,
             "prune": False,
             "stackFileContent": stack_file_content,
-        }
+        },
+        timeout=None,
     )
     typer.secho("done", fg=typer.colors.BRIGHT_GREEN)
     if resp.status_code != HTTPStatus.OK:

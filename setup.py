@@ -6,7 +6,7 @@ setup(
     packages=["deploy"],
     zip_safe=False,
     install_requires=[
-        "requests",
+        "httpx",
         "typer",
         "yarl",
     ],
