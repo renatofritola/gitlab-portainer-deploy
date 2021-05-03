@@ -3,14 +3,15 @@ from setuptools import setup
 setup(
     name="gitlab-portainer-deploy",
     version="0.1",
-    packages=["deploy", ],
+    packages=["deploy"],
     zip_safe=False,
     install_requires=[
-        "click",
         "requests",
+        "typer",
+        "yarl",
     ],
     entry_points="""
         [console_scripts]
-        deploy=deploy.cli:main
+        deploy=deploy.cli:app
     """
 )

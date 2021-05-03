@@ -2,3 +2,6 @@ __pycache__/
 build/
 dist/
 docker-stack.yml
+env
+.idea
+*.egg-info

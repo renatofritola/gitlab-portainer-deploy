@@ -1,93 +1,224 @@
 import json
 import os
 import sys
+from http import HTTPStatus
 
-import click
 import requests
+import typer
+from yarl import URL
+
+app = typer.Typer()
 
 
-@click.command()
-@click.option("--portainer-url", envvar="PORTAINER_URL", required=True, help="Portainer instance URL")
-@click.option("--portainer-username", envvar="PORTAINER_USERNAME", required=True, help="Portainer username")
-@click.option("--portainer-password", envvar="PORTAINER_PASSWORD", required=True, help="Portainer password")
-@click.option("--portainer-stack", envvar="PORTAINER_STACK", default=None, required=True)
-@click.option("--stackfile", envvar="STACKFILE", default="docker-stack.yml", required=True)
-@click.option("--env-var", "-e", multiple=True, default=[], required=False)
-def main(portainer_url, portainer_username, portainer_password, portainer_stack, stackfile, env_var):
-    # Build list of env vars to be passed on to Portainer
-    stack_env = []
-    if len(env_var) > 0:
-        click.echo("Environment variables for stackfile:\n")
-        for e in env_var:
-            name = e.split("=")[0]
-            value = "=".join(e.split("=")[1:])
-            stack_env.append({
-                "name": name,
-                "value": value,
-            })
-            click.echo(f"  {name}: {value}")
+@app.command("deploy")
+def deploy(
+    portainer_url: str = typer.Option(
+        ..., envvar="PORTAINER_URL", help="Portainer instance URL"
+    ),
+    portainer_username: str = typer.Option(
+        ..., envvar="PORTAINER_USERNAME", help="Portainer username"
+    ),
+    portainer_password: str = typer.Option(
+        ..., envvar="PORTAINER_PASSWORD", help="Portainer password"
+    ),
+    portainer_endpoint_id: int = typer.Option(
+        None,
+        envvar="PORTAINER_ENDPOINT_ID",
+        help="Default portainer endpoint ID.",
+    ),
+    stack_name: str = typer.Option(..., envvar="STACK_NAME", help="Name of the stack"),
+    stack_file: str = typer.Option(
+        "docker-stack.yml", envvar="STACK_FILE", help="Path to the stack file"
+    ),
+    env_var: list[str] = typer.Option(
+        None,
+        "--env-var",
+        "-e",
+        help="A list of environment variables used during stack deployment",
+    ),
+):
+    api_url = URL(portainer_url) / "api"
+
+    stack_env = _get_env_variables(env_var)
+    headers = _get_auth_token(api_url, portainer_username, portainer_password)
+    stack_file_content = _get_stackfile_content(stack_file)
+    stack = _get_existing_stack(api_url, headers, stack_name)
+    if stack:
+        stack_id = stack["Id"]
+        endpoint_id = stack["EndpointId"]
     else:
-        click.echo("No environment variables for stackfile.")
+        stack_id = None
+        endpoint_id = portainer_endpoint_id
 
-    # Get auth token
-    click.echo(click.style("\nGetting auth token...", fg="yellow"), nl=False)
-    auth = requests.post(f"{portainer_url}/auth", json={
-        "Username": portainer_username,
-        "Password": portainer_password,
-    })
-
-    if auth.status_code != 200:
-        click.echo(click.style(f"\nHTTP {auth.status_code} error while trying to obtain JWT token", fg="red"))
-        sys.exit(1)
-
-    headers = {"Authorization": "Bearer " + auth.json()["jwt"]}
-    click.echo(click.style(" done", fg="green"))
-
-    # Try to read stackfile contents
-    click.echo(click.style("Checking for stackfile...", fg="yellow"), nl=False)
-    if os.path.isfile(stackfile):
-        with open(stackfile) as f:
-            stackfilecontent = f.read()
-    else:
-        click.echo(click.style(" can't find stackfile", fg="red"))
-        sys.exit(1)
-
-    click.echo(click.style(" done", fg="green"))
-
-    # Get IDs for target endpoint and stack
-    click.echo(click.style("Getting target stack ID...", fg="yellow"), nl=False)
-    stacks = requests.get(f"{portainer_url}/stacks", headers=headers)
-    if stacks.status_code != 200:
-        click.echo(f"\nHTTP {auth.status_code} error while trying to get list of Portainer stacks")
-        sys.exit(1)
-
-    stack_id = None
-    for s in stacks.json():
-        if s["Name"] == portainer_stack:
-            stack_id = str(s["Id"])
-            endpoint_id = str(s["EndpointId"])
+    if not endpoint_id:
+        endpoint_id = _get_endpoint_id(api_url, headers)
 
     if stack_id is None:
-        click.echo(click.style(f" can't find stack \"{portainer_stack}\" in Portainer", fg="red"))
+        swarm_cluster_id = _get_swarm_cluster_id(api_url, headers, endpoint_id)
+        _create_stack(
+            api_url,
+            headers,
+            endpoint_id,
+            swarm_cluster_id,
+            stack_name,
+            stack_file_content,
+            stack_env,
+        )
+    else:
+        _update_stack(api_url, headers, stack_id, endpoint_id, stack_file_content, stack_env)
+
+
+def _get_env_variables(env_var: list[str]):
+    stack_env = []
+    if env_var:
+        typer.echo("Environment variables for stack file:")
+        for pair in env_var:
+            name, value = pair.split("=", maxsplit=1)
+            stack_env.append({"name": name, "value": value})
+            typer.echo(f"  {name}: {value}")
+    else:
+        typer.echo("No environment variables for stackfile.")
+    return stack_env
+
+
+def _get_auth_token(api_url: URL, username: str, password: str):
+    typer.secho("Getting auth token... ", fg=typer.colors.YELLOW, nl=False)
+    resp = requests.post(
+        str(api_url / "auth"),
+        json={"username": username, "password": password},
+    )
+    if resp.status_code != HTTPStatus.OK:
+        typer.secho(
+            f"HTTP {resp.status_code} error while trying to obtain JWT token.",
+            fg=typer.colors.RED,
+        )
+        sys.exit(1)
+    headers = {"Authorization": "Bearer " + resp.json()["jwt"]}
+    typer.secho("done", fg=typer.colors.BRIGHT_GREEN)
+    return headers
+
+
+def _get_stackfile_content(stackfile: str):
+    typer.secho("Checking for stackfile... ", fg=typer.colors.YELLOW, nl=False)
+    if os.path.isfile(stackfile):
+        with open(stackfile) as f:
+            stackfile_content = f.read()
+    else:
+        typer.secho("can't find stackfile", fg=typer.colors.RED)
+        sys.exit(1)
+    typer.secho("done", fg=typer.colors.BRIGHT_GREEN)
+    return stackfile_content
+
+
+def _get_existing_stack(api_url: URL, headers: dict[str, str], stackname: str):
+    typer.secho("Getting target stack ID... ", fg=typer.colors.YELLOW, nl=False)
+    resp = requests.get(str(api_url / "stacks"), headers=headers)
+    if resp.status_code != HTTPStatus.OK:
+        typer.secho(
+            f"HTTP {resp.status_code} error while trying to get list of Portainer stacks",
+            fg=typer.colors.RED,
+        )
+        sys.exit(1)
+    stacks = resp.json()
+    for stack in stacks:
+        if stack["Name"] == stackname:
+            typer.secho("Stack found", fg=typer.colors.BRIGHT_GREEN)
+            return stack
+    typer.secho("stack not found", fg=typer.colors.BRIGHT_YELLOW)
+    return None
+
+
+def _get_endpoint_id(api_url: URL, headers: dict[str, str]):
+    typer.secho("Getting endpoint ID... ", fg=typer.colors.YELLOW, nl=False)
+    resp = requests.get(str(api_url / "endpoints"), headers=headers)
+    if resp.status_code != HTTPStatus.OK:
+        typer.secho(
+            f"HTTP {resp.status_code} error while trying to get list of Portainer endpoints",
+            fg=typer.colors.RED,
+        )
+        sys.exit(1)
+    endpoints = resp.json()
+    if len(endpoints) != 1:
+        typer.secho(
+            "Unable to define endpoint. Specify the ID using the portainer_endpoint_id parameter"
+        )
+        sys.exit(1)
+    endpoint_id = endpoints[0]["Id"]
+    typer.secho(f"Using endpoint with ID = {endpoint_id}", fg=typer.colors.BRIGHT_GREEN)
+    return endpoint_id
+
+
+def _get_swarm_cluster_id(api_url: URL, headers: dict[str, str], endpoint_id: int):
+    typer.secho("Getting Swarm cluster ID... ", fg=typer.colors.YELLOW, nl=False)
+    resp = requests.get(
+        str(api_url / "endpoints" / str(endpoint_id) / "docker" / "swarm"),
+        headers=headers,
+    )
+    if resp.status_code != HTTPStatus.OK:
+        typer.secho(
+            f"HTTP {resp.status_code} error while trying to get Swarm cluster ID",
+            fg=typer.colors.RED,
+        )
+        sys.exit(1)
+    swarm_cluster_id = resp.json()["Cluster"]["ID"]
+    typer.secho(
+        f"using swarm cluster with ID = {swarm_cluster_id}",
+        fg=typer.colors.BRIGHT_GREEN,
+    )
+    return swarm_cluster_id
+
+
+def _create_stack(
+    api_url: URL,
+    headers: dict[str, str],
+    endpoint_id: int,
+    cluster_id: str,
+    stack_name: str,
+    stack_file_content: str,
+    env_vars: list[dict[str, str]],
+):
+    typer.secho("Creating a new stack... ", fg=typer.colors.YELLOW, nl=False)
+    resp = requests.post(
+        str(api_url / "stacks"),
+        headers=headers,
+        params={
+            "type": 1,
+            "method": "string",
+            "endpointId": endpoint_id,
+        },
+        json={
+            "env": env_vars,
+            "name": stack_name,
+            "stackFileContent": stack_file_content,
+            "swarmID": cluster_id,
+        },
+    )
+    typer.secho("done", fg=typer.colors.BRIGHT_GREEN)
+    if resp.status_code != HTTPStatus.OK:
+        typer.secho(f"Deployment failed:\n{json.dumps(resp.json(), indent=2, ensure_ascii=False)}", fg=typer.colors.RED)
         sys.exit(1)
 
-    click.echo(click.style(" done", fg="green"))
 
-    # Update stack
-    click.echo(click.style("Requesting stack update...", fg="yellow"), nl=False)
-    r = requests.put(
-        f"{portainer_url}/stacks/{stack_id}?endpointId={endpoint_id}",
+def _update_stack(
+    api_url: URL,
+    headers: dict[str, str],
+    stack_id: int,
+    endpoint_id: int,
+    stack_file_content: str,
+    env_vars: list[dict[str, str]],
+):
+    typer.secho("Updating an existing stack... ", fg=typer.colors.YELLOW, nl=False)
+    resp = requests.put(
+        str(api_url / "stacks" / str(stack_id)),
         headers=headers,
+        params={"endpointId": endpoint_id},
         json={
-            "StackFileContent": stackfilecontent,
-            "Env": stack_env,
-            "Prune": False
+            "env": env_vars,
+            "prune": False,
+            "stackFileContent": stack_file_content,
         }
     )
-    click.echo(click.style(" done", fg="green"))
-
-    click.echo(f"\nRequest to update stack finished with HTTP {r.status_code}: \n{json.dumps(r.json(), indent=4)}\n")
-
-    if r.status_code != 200:
-        click.echo(click.style(f"Deployment failed", fg="red"))
+    typer.secho("done", fg=typer.colors.BRIGHT_GREEN)
+    if resp.status_code != HTTPStatus.OK:
+        typer.secho(f"Deployment failed:\n{json.dumps(resp.json(), indent=2, ensure_ascii=False)}", fg=typer.colors.RED)
         sys.exit(1)
