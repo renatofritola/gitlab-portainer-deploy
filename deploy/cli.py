@@ -75,7 +75,6 @@ def _get_env_variables(env_var: list[str]):
         for pair in env_var:
             name, value = pair.split("=", maxsplit=1)
             stack_env.append({"name": name, "value": value})
-            typer.echo(f"  {name}: {value}")
     else:
         typer.echo("No environment variables for stackfile.")
     return stack_env
