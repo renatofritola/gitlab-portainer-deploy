@@ -1,0 +1,15 @@
+FROM python:3.9-slim
+
+RUN apt-get update && \
+    apt-get install -y ca-certificates wget unzip && \
+    wget https://releases.hashicorp.com/vault/1.7.1/vault_1.7.1_linux_amd64.zip && \
+    unzip vault_1.7.1_linux_amd64.zip vault && \
+    chmod +x vault && \
+    mv vault /usr/bin/vault && \
+    rm vault_1.7.1_linux_amd64.zip
+
+ADD . /app
+WORKDIR /app
+RUN python /app/setup.py install
+
+CMD deploy
