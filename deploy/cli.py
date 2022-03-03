@@ -216,7 +216,7 @@ def _update_stack(
         params={"endpointId": endpoint_id},
         json={
             "env": env_vars,
-            "prune": False,
+            "prune": True,
             "stackFileContent": stack_file_content,
         },
         timeout=None,
